@@ -1,5 +1,4 @@
 import express from 'express';
-import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
@@ -116,6 +115,7 @@ async function runCampaign(id: string, leadType: string, location: string, targe
     if (!NVIDIA_KEY) missing.push('NVIDIA_API_KEY');
     if (!BREVO_KEY) missing.push('BREVO_API_KEY');
     broadcastLog(id, `ERROR: Missing API Keys: ${missing.join(', ')}. Please add them in settings.`, 'error');
+    broadcastLog(id, `Campaign complete!`, 'done', 100);
     return;
   }
 
@@ -149,11 +149,13 @@ async function runCampaign(id: string, leadType: string, location: string, targe
     
     if (leadsFound.length === 0) {
       broadcastLog(id, `Tavily Search returned 0 leads. Try a broader search.`, 'error');
+      broadcastLog(id, `Campaign complete!`, 'done', 100);
       return;
     }
   } catch (error: any) {
     const errorMsg = error.response?.data?.error || error.message;
     broadcastLog(id, `Tavily Search Failed: ${errorMsg}`, 'error');
+    broadcastLog(id, `Campaign complete!`, 'done', 100);
     return;
   }
 
@@ -258,6 +260,7 @@ async function runCampaign(id: string, leadType: string, location: string, targe
 // --- Vite Middleware ---
 async function setupVite() {
   if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -270,10 +273,14 @@ async function setupVite() {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+}
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+if (!process.env.VERCEL) {
+  setupVite().then(() => {
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
   });
 }
 
-setupVite();
+export default app;

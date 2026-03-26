@@ -35,6 +35,7 @@ export default function Dashboard({ user }: { user: any }) {
   const [selectedPitch, setSelectedPitch] = useState<string | null>(null);
 
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const hasAlertedError = useRef(false);
 
   // --- Database Memory: Load Campaign Settings ---
   useEffect(() => {
@@ -144,6 +145,7 @@ export default function Dashboard({ user }: { user: any }) {
     setLogs([]);
     setProgress(0);
     setTarget(targetCount);
+    hasAlertedError.current = false;
 
     try {
       const res = await fetch('/api/campaign/start', {
@@ -168,6 +170,11 @@ export default function Dashboard({ user }: { user: any }) {
           const parsed = JSON.parse(event.data);
           if (parsed.log) {
             setLogs(prev => [...prev, { ...parsed.log, timestamp: new Date(parsed.log.timestamp) }]);
+            if (parsed.log.phase === 'error' && !hasAlertedError.current) {
+              hasAlertedError.current = true;
+              alert(`Error: ${parsed.log.message}`);
+              // Don't close EventSource here, let the backend finish or close it
+            }
           }
           if (parsed.progress !== undefined) setProgress(parsed.progress);
           if (parsed.target !== undefined) setTarget(parsed.target);
@@ -274,7 +281,7 @@ export default function Dashboard({ user }: { user: any }) {
             className="lg:col-span-4 space-y-6 flex flex-col"
           >
             {/* Campaign Settings */}
-            <section className="bg-white/5 backdrop-blur-[12px] border border-white/10 rounded-3xl p-6 shadow-2xl flex-grow">
+            <section className="bg-[#050505]/80 backdrop-blur-[12px] border border-emerald-500/20 rounded-3xl p-6 shadow-[0_0_20px_rgba(16,185,129,0.1)] flex-grow">
               <h2 className="text-lg font-semibold text-white flex items-center gap-2 mb-6">
                 <Settings className="w-5 h-5 text-emerald-400" />
                 Campaign Parameters
@@ -336,7 +343,7 @@ export default function Dashboard({ user }: { user: any }) {
             </section>
 
             {/* Progress Tracker */}
-            <section className="bg-white/5 backdrop-blur-[12px] border border-white/10 rounded-3xl p-6 shadow-2xl flex items-center gap-6">
+            <section className="bg-[#050505]/80 backdrop-blur-[12px] border border-emerald-500/20 rounded-3xl p-6 shadow-[0_0_20px_rgba(16,185,129,0.1)] flex items-center gap-6">
               <div className="relative w-20 h-20 flex-shrink-0">
                 <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
                   <circle 
@@ -382,8 +389,8 @@ export default function Dashboard({ user }: { user: any }) {
             transition={{ duration: 0.5, delay: 0.2 }}
             className="lg:col-span-8 flex flex-col"
           >
-            <section className="bg-black/40 backdrop-blur-[12px] border border-white/10 rounded-3xl shadow-2xl flex-grow flex flex-col overflow-hidden min-h-[450px]">
-              <div className="bg-white/5 border-b border-white/10 px-6 py-4 flex items-center gap-2">
+            <section className="bg-[#050505]/80 backdrop-blur-[12px] border border-emerald-500/20 rounded-3xl shadow-[0_0_20px_rgba(16,185,129,0.1)] flex-grow flex flex-col overflow-hidden min-h-[450px]">
+              <div className="bg-emerald-500/5 border-b border-emerald-500/20 px-6 py-4 flex items-center gap-2">
                 <TerminalIcon className="w-4 h-4 text-neutral-500" />
                 <span className="text-xs font-mono text-neutral-400 uppercase tracking-wider">Execution Engine Logs</span>
                 <div className="ml-auto flex gap-2">
@@ -441,8 +448,8 @@ export default function Dashboard({ user }: { user: any }) {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.3 }}
         >
-          <section className="bg-white/5 backdrop-blur-[12px] border border-white/10 rounded-3xl shadow-2xl overflow-hidden mt-6">
-            <div className="px-6 py-5 border-b border-white/10 flex items-center justify-between">
+          <section className="bg-[#050505]/80 backdrop-blur-[12px] border border-emerald-500/20 rounded-3xl shadow-[0_0_20px_rgba(16,185,129,0.1)] overflow-hidden mt-6">
+            <div className="px-6 py-5 border-b border-emerald-500/20 flex items-center justify-between bg-emerald-500/5">
               <div className="flex items-center gap-4">
                 <h2 className="text-lg font-semibold text-white flex items-center gap-2">
                   <CheckCircle2 className="w-5 h-5 text-emerald-400" />
@@ -465,14 +472,14 @@ export default function Dashboard({ user }: { user: any }) {
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
-                  <tr className="bg-black/20 border-b border-white/10 text-xs uppercase tracking-wider text-neutral-400">
+                  <tr className="bg-black/40 border-b border-emerald-500/10 text-xs uppercase tracking-wider text-neutral-400">
                     <th className="px-6 py-4 font-medium">Business Name</th>
                     <th className="px-6 py-4 font-medium">Website</th>
                     <th className="px-6 py-4 font-medium">Status</th>
                     <th className="px-6 py-4 font-medium text-right">Action</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/5">
+                <tbody className="divide-y divide-emerald-500/10">
                   {leads.length === 0 ? (
                     <tr>
                       <td colSpan={4} className="px-6 py-8 text-center text-neutral-500 italic">
@@ -481,7 +488,7 @@ export default function Dashboard({ user }: { user: any }) {
                     </tr>
                   ) : (
                     leads.map((lead) => (
-                      <tr key={lead.id} className="hover:bg-white/5 transition-colors group">
+                      <tr key={lead.id} className="hover:bg-emerald-500/5 transition-colors group">
                         <td className="px-6 py-4">
                           <div className="font-medium text-white">{lead.business_name}</div>
                           <div className="text-xs text-neutral-500 mt-0.5">{lead.email}</div>
@@ -564,9 +571,9 @@ export default function Dashboard({ user }: { user: any }) {
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
               onClick={e => e.stopPropagation()}
-              className="bg-[#0a0a0a] border border-white/10 rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden"
+              className="bg-[#050505] border border-emerald-500/20 rounded-2xl shadow-[0_0_30px_rgba(16,185,129,0.15)] w-full max-w-lg overflow-hidden"
             >
-              <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 bg-white/5">
+              <div className="flex items-center justify-between px-6 py-4 border-b border-emerald-500/20 bg-emerald-500/5">
                 <h3 className="text-lg font-semibold text-white flex items-center gap-2">
                   <Mail className="w-5 h-5 text-emerald-400" />
                   Generated Pitch
@@ -579,14 +586,14 @@ export default function Dashboard({ user }: { user: any }) {
                 </button>
               </div>
               <div className="p-6">
-                <div className="bg-black/50 border border-white/5 rounded-xl p-4 text-sm text-neutral-300 whitespace-pre-wrap font-mono leading-relaxed">
+                <div className="bg-black/50 border border-emerald-500/10 rounded-xl p-4 text-sm text-neutral-300 whitespace-pre-wrap font-mono leading-relaxed">
                   {selectedPitch}
                 </div>
               </div>
-              <div className="px-6 py-4 border-t border-white/10 bg-white/5 flex justify-end">
+              <div className="px-6 py-4 border-t border-emerald-500/20 bg-emerald-500/5 flex justify-end">
                 <button 
                   onClick={() => setSelectedPitch(null)}
-                  className="bg-white/10 hover:bg-white/20 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                  className="bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-emerald-500/20"
                 >
                   Close
                 </button>
