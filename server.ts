@@ -4,15 +4,7 @@ import path from 'path';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import axios from 'axios';
-import https from 'https';
-import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
-import pino from 'pino';
-import { Boom } from '@hapi/boom';
-import dns from 'dns';
 import { createClient } from '@supabase/supabase-js';
-
-// Force IPv4 globally to prevent Node.js IPv6 timeout delays (crucial for WhatsApp/Baileys in cloud)
-dns.setDefaultResultOrder('ipv4first');
 
 dotenv.config();
 
@@ -26,154 +18,28 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = 3000;
 
-// Create an HTTPS agent that forces IPv4
-const httpsAgent = new https.Agent({ family: 4 });
-
 app.use(express.json());
-
-// --- WhatsApp Logic ---
-let waSock: any = null;
-let waPairingCode: string | null = null;
-let waStatus: 'idle' | 'generating' | 'code_ready' | 'connected' | 'failed' = 'idle';
-let waUser: any = null;
-
-const waClients: express.Response[] = [];
-
-function broadcastWaStatus() {
-  const data = JSON.stringify({ status: waStatus, code: waPairingCode, user: waUser });
-  waClients.forEach(client => client.write(`data: ${data}\n\n`));
-}
-
-async function connectToWhatsApp(phoneNumber?: string) {
-  const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
-  
-  waSock = makeWASocket({
-    auth: state,
-    printQRInTerminal: false,
-    logger: pino({ level: 'silent' }) as any,
-    browser: ["Ubuntu", "Chrome", "20.0.04"],
-    connectTimeoutMs: 5000,
-    defaultQueryTimeoutMs: 0,
-    keepAliveIntervalMs: 10000,
-    syncFullHistory: false,
-    markOnlineOnConnect: false,
-    generateHighQualityLinkPreview: false
-  });
-
-  if (phoneNumber && !waSock.authState.creds.registered) {
-    setTimeout(async () => {
-      try {
-        let code = await waSock.requestPairingCode(phoneNumber);
-        if (code) {
-          code = code.match(/.{1,4}/g)?.join('-') || code;
-          waPairingCode = code;
-          waStatus = 'code_ready';
-          broadcastWaStatus();
-        }
-      } catch (err) {
-        console.error('Pairing code error:', err);
-        waStatus = 'failed';
-        broadcastWaStatus();
-      }
-    }, 2000);
-  }
-
-  waSock.ev.on('creds.update', saveCreds);
-
-  waSock.ev.on('connection.update', async (update: any) => {
-    const { connection, lastDisconnect } = update;
-    
-    if (connection === 'close') {
-      const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
-      if (shouldReconnect) {
-        connectToWhatsApp();
-      } else {
-        waStatus = 'idle';
-        waPairingCode = null;
-        waUser = null;
-        broadcastWaStatus();
-      }
-    } else if (connection === 'open') {
-      waStatus = 'connected';
-      waPairingCode = null;
-      waUser = waSock.user;
-      broadcastWaStatus();
-      
-      try {
-        await waSock.sendMessage(waSock.user.id, { text: '✅ Lead Generation Dashboard Connected Successfully!' });
-      } catch (e) {
-        console.error('Failed to send welcome message', e);
-      }
-    }
-  });
-}
-
-app.get('/api/whatsapp/stream', (req, res) => {
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  waClients.push(res);
-  
-  res.write(`data: ${JSON.stringify({ status: waStatus, code: waPairingCode, user: waUser })}\n\n`);
-  
-  req.on('close', () => {
-    const index = waClients.indexOf(res);
-    if (index !== -1) waClients.splice(index, 1);
-  });
-});
-
-app.post('/api/whatsapp/start', async (req, res) => {
-  const { phoneNumber } = req.body;
-  if (waStatus === 'connected') {
-    return res.json({ success: true, message: 'Already connected' });
-  }
-  waStatus = 'generating';
-  broadcastWaStatus();
-  
-  const cleanNumber = phoneNumber ? phoneNumber.replace(/[^0-9]/g, '') : undefined;
-  connectToWhatsApp(cleanNumber).catch(console.error);
-  
-  res.json({ success: true });
-});
-
-app.post('/api/whatsapp/refresh', async (req, res) => {
-  const { phoneNumber } = req.body;
-  if (waSock) {
-    waSock.ev.removeAllListeners();
-    waSock.end(undefined);
-    waSock = null;
-  }
-  waStatus = 'generating';
-  waPairingCode = null;
-  broadcastWaStatus();
-  
-  const cleanNumber = phoneNumber ? phoneNumber.replace(/[^0-9]/g, '') : undefined;
-  connectToWhatsApp(cleanNumber).catch(console.error);
-  res.json({ success: true });
-});
-
-app.post('/api/whatsapp/logout', async (req, res) => {
-  if (waSock) {
-    await waSock.logout();
-  }
-  res.json({ success: true });
-});
 
 // --- API Routes ---
 
 // Store active campaigns and their SSE clients
 const campaigns = new Map<string, {
-  logs: string[],
+  logs: any[],
   progress: number,
   target: number,
   clients: express.Response[]
 }>();
 
-function broadcastLog(campaignId: string, message: string, progress?: number) {
+function broadcastLog(campaignId: string, message: string, phase: string, progress?: number) {
   const campaign = campaigns.get(campaignId);
   if (!campaign) return;
 
-  const logEntry = `[${new Date().toISOString()}] ${message}`;
+  const logEntry = {
+    id: Math.random().toString(36).substring(7),
+    message,
+    phase,
+    timestamp: new Date().toISOString()
+  };
   campaign.logs.push(logEntry);
   if (progress !== undefined) {
     campaign.progress = progress;
@@ -200,7 +66,7 @@ app.post('/api/campaign/start', async (req, res) => {
 
   // Start the background loop
   runCampaign(campaignId, leadType, location, targetCount, userId).catch(err => {
-    broadcastLog(campaignId, `ERROR: ${err.message}`);
+    broadcastLog(campaignId, `ERROR: ${err.message}`, 'error');
   });
 });
 
@@ -228,112 +94,163 @@ app.get('/api/campaign/stream', (req, res) => {
 });
 
 async function runCampaign(id: string, leadType: string, location: string, targetCount: number, userId?: string) {
-  broadcastLog(id, `Starting campaign for ${targetCount} ${leadType} leads in ${location}...`, 0);
-
-  if (waSock && waStatus === 'connected') {
-    try {
-      await waSock.sendMessage(waSock.user.id, { text: `🚀 Campaign Started: ${targetCount} ${leadType} leads in ${location}` });
-    } catch (e) {
-      console.error('Failed to send WhatsApp message', e);
-    }
-  }
+  broadcastLog(id, `Starting campaign for ${targetCount} ${leadType} leads in ${location}...`, 'search', 0);
 
   const TAVILY_KEY = process.env.TAVILY_API_KEY || process.env.TAVILY_KEY;
   const NVIDIA_KEY = process.env.NVIDIA_API_KEY || process.env.NVIDIA_KEY;
   const BREVO_KEY = process.env.BREVO_API_KEY || process.env.BREVO_KEY;
 
   if (!TAVILY_KEY || !NVIDIA_KEY || !BREVO_KEY) {
-    broadcastLog(id, `WARNING: Missing API keys in environment. Running in simulation mode.`);
+    broadcastLog(id, `WARNING: Missing API keys in environment. Running in simulation mode.`, 'error');
   }
 
-  for (let i = 1; i <= targetCount; i++) {
-    broadcastLog(id, `[Lead ${i}/${targetCount}] Searching for leads via Tavily...`);
-    await new Promise(r => setTimeout(r, 1500)); // Simulate network delay
+  let leadsFound: any[] = [];
 
-    let leadName = `Business ${Math.floor(Math.random() * 1000)}`;
-    let leadEmail = `contact@${leadName.toLowerCase().replace(' ', '')}.com`;
-    let leadWebsite = `https://www.${leadName.toLowerCase().replace(' ', '')}.com`;
-
+  // Phase 1: Tavily Search
+  broadcastLog(id, `Phase 1 (Tavily): Searching for high-quality leads...`, 'search');
+  try {
     if (TAVILY_KEY) {
-      // Real Tavily call would go here
-      broadcastLog(id, `[Lead ${i}/${targetCount}] Found lead: ${leadName} (${leadEmail})`);
+      const tavilyRes = await axios.post('https://api.tavily.com/search', {
+        api_key: TAVILY_KEY,
+        query: `Find ${targetCount} ${leadType} businesses in ${location}. Include their website and contact email.`,
+        search_depth: "advanced",
+        include_raw_content: false,
+        max_results: targetCount * 2 // Ask for more to filter
+      });
+      
+      const results = tavilyRes.data.results || [];
+      for (const res of results) {
+        if (leadsFound.length >= targetCount) break;
+        
+        // Very basic email extraction from content
+        const emailMatch = res.content.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/gi);
+        const email = emailMatch ? emailMatch[0] : `contact@${res.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]}`;
+        
+        leadsFound.push({
+          name: res.title || `Business ${leadsFound.length + 1}`,
+          url: res.url,
+          email: email.toLowerCase()
+        });
+      }
     } else {
-      broadcastLog(id, `[Lead ${i}/${targetCount}] Simulated lead found: ${leadName}`);
+      // Simulation fallback
+      await new Promise(r => setTimeout(r, 2000));
+      for (let i = 0; i < targetCount; i++) {
+        leadsFound.push({
+          name: `Simulated Business ${i + 1}`,
+          url: `https://www.simulated${i + 1}.com`,
+          email: `contact@simulated${i + 1}.com`
+        });
+      }
+    }
+  } catch (error: any) {
+    broadcastLog(id, `Tavily Search Failed: ${error.message}`, 'error');
+    return;
+  }
+
+  broadcastLog(id, `Found ${leadsFound.length} leads. Starting analysis and outreach...`, 'search');
+  
+  // Update the target to the actual number of leads found
+  const campaign = campaigns.get(id);
+  if (campaign) {
+    campaign.target = leadsFound.length;
+  }
+
+  for (let i = 0; i < leadsFound.length; i++) {
+    const lead = leadsFound[i];
+    let pitch = '';
+
+    // Phase 2: Nvidia Falcon-3 Analysis
+    broadcastLog(id, `[Lead ${i + 1}/${leadsFound.length}] Phase 2 (Falcon-3): Analyzing lead and writing pitch for ${lead.name}...`, 'analyze');
+    try {
+      if (NVIDIA_KEY) {
+        const nvRes = await axios.post('https://integrate.api.nvidia.com/v1/chat/completions', {
+          model: "tiiuae/falcon3-7b-instruct",
+          messages: [{ role: "user", content: `Write a short, high-conversion cold email for ${lead.name} about their services. Keep it under 100 words. Do not include subject line.` }],
+          max_tokens: 200
+        }, {
+          headers: { 'Authorization': `Bearer ${NVIDIA_KEY}`, 'Content-Type': 'application/json' }
+        });
+        pitch = nvRes.data.choices[0].message.content;
+      } else {
+        await new Promise(r => setTimeout(r, 1500));
+        pitch = `Hi there,\n\nI noticed ${lead.name} is doing great work in ${location}. I'd love to help you scale your services with our custom solutions.\n\nLet's chat!`;
+      }
+      broadcastLog(id, `[Lead ${i + 1}/${leadsFound.length}] Pitch generated successfully.`, 'analyze');
+    } catch (error: any) {
+      broadcastLog(id, `[Lead ${i + 1}/${leadsFound.length}] Nvidia API Failed: ${error.message}`, 'error');
+      pitch = `Hi there,\n\nI noticed ${lead.name} is doing great work. Let's connect!`;
     }
 
-    // Save Lead to Supabase Memory
+    // Phase 3: Brevo Email
+    broadcastLog(id, `[Lead ${i + 1}/${leadsFound.length}] Phase 3 (Brevo): Preparing and sending email to ${lead.email}...`, 'email');
+    try {
+      if (BREVO_KEY) {
+        await axios.post('https://api.brevo.com/v3/smtp/email', {
+          sender: { name: "Hebe Hack", email: "hebehack2@gmail.com" },
+          to: [{ email: lead.email, name: lead.name }],
+          subject: `Quick question about ${lead.name}`,
+          htmlContent: `<p>${pitch.replace(/\n/g, '<br>')}</p>`
+        }, {
+          headers: { 'api-key': BREVO_KEY, 'Content-Type': 'application/json' }
+        });
+      } else {
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      broadcastLog(id, `[Lead ${i + 1}/${leadsFound.length}] Email sent to ${lead.email}.`, 'email');
+    } catch (error: any) {
+      broadcastLog(id, `[Lead ${i + 1}/${leadsFound.length}] Brevo API Failed: ${error.message}`, 'error');
+    }
+
+    // Save Lead to Supabase
     if (supabase && userId) {
       try {
         await supabase.from('leads').insert({
           user_id: userId,
-          business_name: leadName,
-          email: leadEmail,
-          website: leadWebsite,
-          status: 'Pending'
+          business_name: lead.name,
+          email: lead.email,
+          website: lead.url,
+          pitch: pitch,
+          status: 'Email Sent'
         });
-        broadcastLog(id, `[Lead ${i}/${targetCount}] Lead saved to Supabase Memory.`);
       } catch (e) {
         console.error('Failed to save lead to Supabase', e);
       }
     }
 
-    broadcastLog(id, `[Lead ${i}/${targetCount}] Analyzing data & writing email via Nvidia Falcon3...`);
-    await new Promise(r => setTimeout(r, 2000));
+    broadcastLog(id, `[Lead ${i + 1}/${leadsFound.length}] Successfully processed.`, 'done', i + 1);
+  }
 
-    if (NVIDIA_KEY) {
-      // Real Nvidia call structure
-      try {
-        /*
-        const nvRes = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${NVIDIA_KEY}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            model: "tiiuae/falcon3-7b-instruct",
-            messages: [{ role: "user", content: `Write a short cold email for ${leadName} offering a demo website.` }]
-          })
-        });
-        */
-      } catch (e) {}
-    }
-
-    broadcastLog(id, `[Lead ${i}/${targetCount}] Triggering Vercel deployment for demo site...`);
-    await new Promise(r => setTimeout(r, 1500));
-
-    broadcastLog(id, `[Lead ${i}/${targetCount}] Sending email via Brevo to ${leadEmail}...`);
-    await new Promise(r => setTimeout(r, 1000));
-
-    // Update Lead Status to Contacted
+  // Phase 4: Summary Email
+  broadcastLog(id, `Phase 4: Sending summary email to you...`, 'done');
+  try {
+    let userEmail = "hebehack2@gmail.com";
+    let userName = "Hebe Hack";
+    
     if (supabase && userId) {
-      try {
-        await supabase.from('leads')
-          .update({ status: 'Contacted' })
-          .eq('user_id', userId)
-          .eq('email', leadEmail);
-      } catch (e) {}
+      const { data: userData } = await supabase.auth.admin.getUserById(userId);
+      if (userData?.user?.email) {
+        userEmail = userData.user.email;
+        userName = userData.user.user_metadata?.full_name || userEmail.split('@')[0];
+      }
     }
 
-    broadcastLog(id, `[Lead ${i}/${targetCount}] Successfully processed.`, i);
+    if (BREVO_KEY) {
+      await axios.post('https://api.brevo.com/v3/smtp/email', {
+        sender: { name: "LeadGen Master", email: "noreply@leadgenmaster.com" },
+        to: [{ email: userEmail, name: userName }],
+        subject: `Campaign Finished! ${leadsFound.length} Leads contacted.`,
+        htmlContent: `<p>Your campaign for ${leadType} in ${location} has finished successfully.</p><p>Total leads contacted: ${leadsFound.length}</p>`
+      }, {
+        headers: { 'api-key': BREVO_KEY, 'Content-Type': 'application/json' }
+      });
+    }
+  } catch (error: any) {
+    console.error('Failed to send summary email', error.message);
   }
 
-  broadcastLog(id, `Campaign complete! Processed ${targetCount} leads.`);
+  broadcastLog(id, `Campaign complete! Processed ${leadsFound.length} leads.`, 'done');
 }
-
-app.post('/api/webhooks/brevo', async (req, res) => {
-  // Handle Brevo Webhook (open, click, reply)
-  const event = req.body;
-  console.log('Brevo Webhook received:', event);
-
-  if (waSock && waStatus === 'connected' && event.event === 'opened') {
-    const message = `📧 Lead Opened Email!\nEmail: ${event.email}\nTime: ${new Date().toISOString()}`;
-    try {
-      await waSock.sendMessage(waSock.user.id, { text: message });
-    } catch (e: any) {
-      console.error('Failed to send WhatsApp notification', e);
-    }
-  }
-
-  res.status(200).send('OK');
-});
 
 // --- Vite Middleware ---
 async function setupVite() {

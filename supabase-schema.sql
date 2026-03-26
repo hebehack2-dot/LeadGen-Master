@@ -26,6 +26,7 @@ create table leads (
   business_name text,
   email text,
   website text,
+  pitch text,
   status text default 'Pending',
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
