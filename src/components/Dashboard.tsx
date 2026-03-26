@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Settings, Terminal as TerminalIcon, Loader2, Activity, LogOut, CheckCircle2, Search, BrainCircuit, Mail, ExternalLink, Eye, X } from 'lucide-react';
+import { Play, Settings, Terminal as TerminalIcon, Loader2, Activity, LogOut, CheckCircle2, Search, BrainCircuit, Mail, ExternalLink, Eye, X, Download } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -153,6 +153,13 @@ export default function Dashboard({ user }: { user: any }) {
       });
       
       const data = await res.json();
+      
+      if (!res.ok) {
+        setIsRunning(false);
+        alert(`Error: ${data.error || 'Failed to start campaign'}`);
+        return;
+      }
+
       if (data.campaignId) {
         const es = new EventSource(`/api/campaign/stream?id=${data.campaignId}`);
         setEventSource(es);
@@ -176,9 +183,9 @@ export default function Dashboard({ user }: { user: any }) {
           es.close();
         };
       }
-    } catch (e) {
+    } catch (e: any) {
       setIsRunning(false);
-      alert('Failed to start campaign');
+      alert(`Failed to start campaign: ${e.message}`);
     }
   };
 
@@ -199,6 +206,23 @@ export default function Dashboard({ user }: { user: any }) {
       case 'error': return <X className="w-4 h-4 text-red-400" />;
       default: return <TerminalIcon className="w-4 h-4 text-neutral-400" />;
     }
+  };
+
+  const downloadCSV = () => {
+    if (leads.length === 0) return alert('No leads to download.');
+    const headers = ['Business Name', 'Email', 'Website', 'Status', 'Pitch'];
+    const csvContent = [
+      headers.join(','),
+      ...leads.map(l => `"${l.business_name}","${l.email}","${l.website || ''}","${l.status}","${(l.pitch || '').replace(/"/g, '""')}"`)
+    ].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', 'generated_leads.csv');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const userName = user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'User';
@@ -250,7 +274,7 @@ export default function Dashboard({ user }: { user: any }) {
             className="lg:col-span-4 space-y-6 flex flex-col"
           >
             {/* Campaign Settings */}
-            <section className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl p-6 shadow-2xl flex-grow">
+            <section className="bg-white/5 backdrop-blur-[12px] border border-white/10 rounded-3xl p-6 shadow-2xl flex-grow">
               <h2 className="text-lg font-semibold text-white flex items-center gap-2 mb-6">
                 <Settings className="w-5 h-5 text-emerald-400" />
                 Campaign Parameters
@@ -312,7 +336,7 @@ export default function Dashboard({ user }: { user: any }) {
             </section>
 
             {/* Progress Tracker */}
-            <section className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl p-6 shadow-2xl flex items-center gap-6">
+            <section className="bg-white/5 backdrop-blur-[12px] border border-white/10 rounded-3xl p-6 shadow-2xl flex items-center gap-6">
               <div className="relative w-20 h-20 flex-shrink-0">
                 <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
                   <circle 
@@ -358,7 +382,7 @@ export default function Dashboard({ user }: { user: any }) {
             transition={{ duration: 0.5, delay: 0.2 }}
             className="lg:col-span-8 flex flex-col"
           >
-            <section className="bg-black/40 backdrop-blur-xl border border-white/10 rounded-3xl shadow-2xl flex-grow flex flex-col overflow-hidden min-h-[450px]">
+            <section className="bg-black/40 backdrop-blur-[12px] border border-white/10 rounded-3xl shadow-2xl flex-grow flex flex-col overflow-hidden min-h-[450px]">
               <div className="bg-white/5 border-b border-white/10 px-6 py-4 flex items-center gap-2">
                 <TerminalIcon className="w-4 h-4 text-neutral-500" />
                 <span className="text-xs font-mono text-neutral-400 uppercase tracking-wider">Execution Engine Logs</span>
@@ -417,15 +441,25 @@ export default function Dashboard({ user }: { user: any }) {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.3 }}
         >
-          <section className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl shadow-2xl overflow-hidden mt-6">
+          <section className="bg-white/5 backdrop-blur-[12px] border border-white/10 rounded-3xl shadow-2xl overflow-hidden mt-6">
             <div className="px-6 py-5 border-b border-white/10 flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-                <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-                Generated Leads
-              </h2>
-              <span className="text-xs font-medium text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20">
-                {leads.length} Total
-              </span>
+              <div className="flex items-center gap-4">
+                <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                  Generated Leads
+                </h2>
+                <span className="text-xs font-medium text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20">
+                  {leads.length} Total
+                </span>
+              </div>
+              <button 
+                onClick={downloadCSV}
+                disabled={leads.length === 0}
+                className="flex items-center gap-2 text-sm text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 px-4 py-2 rounded-lg border border-emerald-500/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Download className="w-4 h-4" />
+                Download CSV
+              </button>
             </div>
             
             <div className="overflow-x-auto">
@@ -473,14 +507,37 @@ export default function Dashboard({ user }: { user: any }) {
                           </span>
                         </td>
                         <td className="px-6 py-4 text-right">
-                          <button 
-                            onClick={() => setSelectedPitch(lead.pitch || 'No pitch available.')}
-                            disabled={!lead.pitch}
-                            className="inline-flex items-center gap-1.5 text-sm text-neutral-400 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            <Eye className="w-4 h-4" />
-                            View Pitch
-                          </button>
+                          <div className="flex items-center justify-end gap-3">
+                            <button 
+                              onClick={() => {
+                                const headers = ['Business Name', 'Email', 'Website', 'Status', 'Pitch'];
+                                const csvContent = [
+                                  headers.join(','),
+                                  `"${lead.business_name}","${lead.email}","${lead.website || ''}","${lead.status}","${(lead.pitch || '').replace(/"/g, '""')}"`
+                                ].join('\n');
+                                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                                const url = URL.createObjectURL(blob);
+                                const link = document.createElement('a');
+                                link.setAttribute('href', url);
+                                link.setAttribute('download', `${lead.business_name.replace(/\s+/g, '_')}_lead.csv`);
+                                document.body.appendChild(link);
+                                link.click();
+                                document.body.removeChild(link);
+                              }}
+                              className="inline-flex items-center gap-1.5 text-sm text-neutral-400 hover:text-emerald-400 transition-colors"
+                              title="Download Lead CSV"
+                            >
+                              <Download className="w-4 h-4" />
+                            </button>
+                            <button 
+                              onClick={() => setSelectedPitch(lead.pitch || 'No pitch available.')}
+                              disabled={!lead.pitch}
+                              className="inline-flex items-center gap-1.5 text-sm text-neutral-400 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              <Eye className="w-4 h-4" />
+                              View Pitch
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))

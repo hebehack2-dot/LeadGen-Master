@@ -54,6 +54,16 @@ function broadcastLog(campaignId: string, message: string, phase: string, progre
 app.post('/api/campaign/start', async (req, res) => {
   const { leadType, location, targetCount, userId } = req.body;
   
+  const TAVILY_KEY = process.env.TAVILY_API_KEY || process.env.TAVILY_KEY;
+  const NVIDIA_KEY = process.env.NVIDIA_API_KEY || process.env.NVIDIA_KEY;
+
+  if (!TAVILY_KEY || !NVIDIA_KEY) {
+    const missing = [];
+    if (!TAVILY_KEY) missing.push('Tavily API Key');
+    if (!NVIDIA_KEY) missing.push('Nvidia API Key');
+    return res.status(400).json({ error: `Missing API Keys: ${missing.join(', ')}. Please add them in your environment settings to run a real campaign.` });
+  }
+
   const campaignId = Math.random().toString(36).substring(7);
   campaigns.set(campaignId, {
     logs: [],
@@ -142,7 +152,8 @@ async function runCampaign(id: string, leadType: string, location: string, targe
       return;
     }
   } catch (error: any) {
-    broadcastLog(id, `Tavily Search Failed: ${error.message}`, 'error');
+    const errorMsg = error.response?.data?.error || error.message;
+    broadcastLog(id, `Tavily Search Failed: ${errorMsg}`, 'error');
     return;
   }
 
@@ -171,7 +182,8 @@ async function runCampaign(id: string, leadType: string, location: string, targe
       pitch = nvRes.data.choices[0].message.content;
       broadcastLog(id, `[Lead ${i + 1}/${leadsFound.length}] Pitch generated successfully.`, 'analyze');
     } catch (error: any) {
-      broadcastLog(id, `[Lead ${i + 1}/${leadsFound.length}] Nvidia API Failed: ${error.message}`, 'error');
+      const errorMsg = error.response?.data?.detail || error.response?.data?.message || error.message;
+      broadcastLog(id, `[Lead ${i + 1}/${leadsFound.length}] Nvidia API Failed: ${errorMsg}`, 'error');
       pitch = `Hi there,\n\nI noticed ${lead.name} is doing great work. Let's connect!`; // Fallback pitch if AI fails for one lead
     }
 
