@@ -101,7 +101,12 @@ async function runCampaign(id: string, leadType: string, location: string, targe
   const BREVO_KEY = process.env.BREVO_API_KEY || process.env.BREVO_KEY;
 
   if (!TAVILY_KEY || !NVIDIA_KEY || !BREVO_KEY) {
-    broadcastLog(id, `WARNING: Missing API keys in environment. Running in simulation mode.`, 'error');
+    const missing = [];
+    if (!TAVILY_KEY) missing.push('TAVILY_API_KEY');
+    if (!NVIDIA_KEY) missing.push('NVIDIA_API_KEY');
+    if (!BREVO_KEY) missing.push('BREVO_API_KEY');
+    broadcastLog(id, `ERROR: Missing API Keys: ${missing.join(', ')}. Please add them in settings.`, 'error');
+    return;
   }
 
   let leadsFound: any[] = [];
@@ -109,39 +114,32 @@ async function runCampaign(id: string, leadType: string, location: string, targe
   // Phase 1: Tavily Search
   broadcastLog(id, `Phase 1 (Tavily): Searching for high-quality leads...`, 'search');
   try {
-    if (TAVILY_KEY) {
-      const tavilyRes = await axios.post('https://api.tavily.com/search', {
-        api_key: TAVILY_KEY,
-        query: `Find ${targetCount} ${leadType} businesses in ${location}. Include their website and contact email.`,
-        search_depth: "advanced",
-        include_raw_content: false,
-        max_results: targetCount * 2 // Ask for more to filter
-      });
+    const tavilyRes = await axios.post('https://api.tavily.com/search', {
+      api_key: TAVILY_KEY,
+      query: `Find ${targetCount} ${leadType} businesses in ${location}. Include their website and contact email.`,
+      search_depth: "advanced",
+      include_raw_content: false,
+      max_results: targetCount * 2 // Ask for more to filter
+    });
+    
+    const results = tavilyRes.data.results || [];
+    for (const res of results) {
+      if (leadsFound.length >= targetCount) break;
       
-      const results = tavilyRes.data.results || [];
-      for (const res of results) {
-        if (leadsFound.length >= targetCount) break;
-        
-        // Very basic email extraction from content
-        const emailMatch = res.content.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/gi);
-        const email = emailMatch ? emailMatch[0] : `contact@${res.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]}`;
-        
-        leadsFound.push({
-          name: res.title || `Business ${leadsFound.length + 1}`,
-          url: res.url,
-          email: email.toLowerCase()
-        });
-      }
-    } else {
-      // Simulation fallback
-      await new Promise(r => setTimeout(r, 2000));
-      for (let i = 0; i < targetCount; i++) {
-        leadsFound.push({
-          name: `Simulated Business ${i + 1}`,
-          url: `https://www.simulated${i + 1}.com`,
-          email: `contact@simulated${i + 1}.com`
-        });
-      }
+      // Very basic email extraction from content
+      const emailMatch = res.content.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/gi);
+      const email = emailMatch ? emailMatch[0] : `contact@${res.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]}`;
+      
+      leadsFound.push({
+        name: res.title || new URL(res.url).hostname.replace('www.', ''),
+        url: res.url,
+        email: email.toLowerCase()
+      });
+    }
+    
+    if (leadsFound.length === 0) {
+      broadcastLog(id, `Tavily Search returned 0 leads. Try a broader search.`, 'error');
+      return;
     }
   } catch (error: any) {
     broadcastLog(id, `Tavily Search Failed: ${error.message}`, 'error');
@@ -163,43 +161,36 @@ async function runCampaign(id: string, leadType: string, location: string, targe
     // Phase 2: Nvidia Falcon-3 Analysis
     broadcastLog(id, `[Lead ${i + 1}/${leadsFound.length}] Phase 2 (Falcon-3): Analyzing lead and writing pitch for ${lead.name}...`, 'analyze');
     try {
-      if (NVIDIA_KEY) {
-        const nvRes = await axios.post('https://integrate.api.nvidia.com/v1/chat/completions', {
-          model: "tiiuae/falcon3-7b-instruct",
-          messages: [{ role: "user", content: `Write a short, high-conversion cold email for ${lead.name} about their services. Keep it under 100 words. Do not include subject line.` }],
-          max_tokens: 200
-        }, {
-          headers: { 'Authorization': `Bearer ${NVIDIA_KEY}`, 'Content-Type': 'application/json' }
-        });
-        pitch = nvRes.data.choices[0].message.content;
-      } else {
-        await new Promise(r => setTimeout(r, 1500));
-        pitch = `Hi there,\n\nI noticed ${lead.name} is doing great work in ${location}. I'd love to help you scale your services with our custom solutions.\n\nLet's chat!`;
-      }
+      const nvRes = await axios.post('https://integrate.api.nvidia.com/v1/chat/completions', {
+        model: "tiiuae/falcon3-7b-instruct",
+        messages: [{ role: "user", content: `Write a short, high-conversion cold email for ${lead.name} about their services. Keep it under 100 words. Do not include subject line.` }],
+        max_tokens: 200
+      }, {
+        headers: { 'Authorization': `Bearer ${NVIDIA_KEY}`, 'Content-Type': 'application/json' }
+      });
+      pitch = nvRes.data.choices[0].message.content;
       broadcastLog(id, `[Lead ${i + 1}/${leadsFound.length}] Pitch generated successfully.`, 'analyze');
     } catch (error: any) {
       broadcastLog(id, `[Lead ${i + 1}/${leadsFound.length}] Nvidia API Failed: ${error.message}`, 'error');
-      pitch = `Hi there,\n\nI noticed ${lead.name} is doing great work. Let's connect!`;
+      pitch = `Hi there,\n\nI noticed ${lead.name} is doing great work. Let's connect!`; // Fallback pitch if AI fails for one lead
     }
 
     // Phase 3: Brevo Email
     broadcastLog(id, `[Lead ${i + 1}/${leadsFound.length}] Phase 3 (Brevo): Preparing and sending email to ${lead.email}...`, 'email');
+    let emailStatus = 'Email Sent';
     try {
-      if (BREVO_KEY) {
-        await axios.post('https://api.brevo.com/v3/smtp/email', {
-          sender: { name: "Hebe Hack", email: "hebehack2@gmail.com" },
-          to: [{ email: lead.email, name: lead.name }],
-          subject: `Quick question about ${lead.name}`,
-          htmlContent: `<p>${pitch.replace(/\n/g, '<br>')}</p>`
-        }, {
-          headers: { 'api-key': BREVO_KEY, 'Content-Type': 'application/json' }
-        });
-      } else {
-        await new Promise(r => setTimeout(r, 1000));
-      }
+      await axios.post('https://api.brevo.com/v3/smtp/email', {
+        sender: { name: "Hebe Hack", email: "hebehack2@gmail.com" },
+        to: [{ email: lead.email, name: lead.name }],
+        subject: `Quick question about ${lead.name}`,
+        htmlContent: `<p>${pitch.replace(/\n/g, '<br>')}</p>`
+      }, {
+        headers: { 'api-key': BREVO_KEY, 'Content-Type': 'application/json' }
+      });
       broadcastLog(id, `[Lead ${i + 1}/${leadsFound.length}] Email sent to ${lead.email}.`, 'email');
     } catch (error: any) {
       broadcastLog(id, `[Lead ${i + 1}/${leadsFound.length}] Brevo API Failed: ${error.message}`, 'error');
+      emailStatus = 'Failed';
     }
 
     // Save Lead to Supabase
@@ -211,7 +202,7 @@ async function runCampaign(id: string, leadType: string, location: string, targe
           email: lead.email,
           website: lead.url,
           pitch: pitch,
-          status: 'Email Sent'
+          status: emailStatus
         });
       } catch (e) {
         console.error('Failed to save lead to Supabase', e);
